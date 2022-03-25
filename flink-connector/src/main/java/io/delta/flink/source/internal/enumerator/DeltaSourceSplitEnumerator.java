@@ -2,58 +2,40 @@ package io.delta.flink.source.internal.enumerator;
 
 import java.io.IOException;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.Optional;
+
 import javax.annotation.Nullable;
 
-import io.delta.flink.source.internal.DeltaSourceConfiguration;
-import io.delta.flink.source.internal.file.AddFileEnumeratorContext;
 import io.delta.flink.source.internal.state.DeltaEnumeratorStateCheckpoint;
 import io.delta.flink.source.internal.state.DeltaSourceSplit;
-import io.delta.flink.source.internal.utils.SourceUtils;
-import io.delta.flink.source.internal.utils.TransitiveOptional;
-import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 import org.apache.flink.connector.file.src.FileSourceSplit;
 import org.apache.flink.connector.file.src.assigners.FileSplitAssigner;
 import org.apache.flink.core.fs.Path;
-import org.apache.hadoop.conf.Configuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import static io.delta.flink.source.internal.enumerator.DeltaSourceSplitEnumerator.AssignSplitStatus.NO_MORE_READERS;
 import static io.delta.flink.source.internal.enumerator.DeltaSourceSplitEnumerator.AssignSplitStatus.NO_MORE_SPLITS;
 
-import io.delta.standalone.DeltaLog;
-import io.delta.standalone.Snapshot;
-import io.delta.standalone.actions.AddFile;
-
 /**
  * A base class for {@link SplitEnumerator} used by {@link io.delta.flink.source.DeltaSource}
  * <p>
- * The implementations that will choose to extend this class will have to implement two abstract
- * methods:
- * <ul>
- *  <li>{@link DeltaSourceSplitEnumerator#getInitialSnapshot(long)}</li>
- *  <li>{@link DeltaSourceSplitEnumerator#handleNoMoreSplits(int)}</li>
- * </ul>
+ * The implementations that will choose to extend this class will have to implement abstract method
+ * {@link DeltaSourceSplitEnumerator#handleNoMoreSplits(int)}
  */
 public abstract class DeltaSourceSplitEnumerator implements
     SplitEnumerator<DeltaSourceSplit, DeltaEnumeratorStateCheckpoint<DeltaSourceSplit>> {
 
-    /**
-     * Constant used when no snapshot value was specified, for example first Source initialization
-     * without any previously taken snapshot.
-     */
-    protected static final int NO_SNAPSHOT_VERSION = -1;
     private static final Logger LOG =
         LoggerFactory.getLogger(DeltaSourceSplitEnumerator.class);
+
     /**
-     * Path to Delta Table from which this {@code DeltaSource} should read.
+     * Path to Delta table that should be processed.
      */
     protected final Path deltaTablePath;
 
@@ -63,60 +45,32 @@ public abstract class DeltaSourceSplitEnumerator implements
     protected final FileSplitAssigner splitAssigner;
 
     /**
-     * The Delta {@link Snapshot} that we should read data from.
-     */
-    protected final Snapshot snapshot;
-
-    /**
      * A {@link SplitEnumeratorContext} assigned to this {@code SourceEnumerator}.
      */
     protected final SplitEnumeratorContext<DeltaSourceSplit> enumContext;
 
     /**
      * Map containing all readers that have requested the split.
+     * <p>
+     * The key is the subtask id of the source reader who sent the source event. requesterHostname
+     * <p>
+     * The value is an optional hostname where the requesting task is running. This can be used to
+     * make split assignments locality-aware.
+     *
+     * @implNote The type contract for this map comes from {@link #handleSplitRequest(int, String)}
+     * method.
      */
     protected final LinkedHashMap<Integer, String> readersAwaitingSplit;
 
-    /**
-     * Set with already processed paths for Parquet Files. This map is used during recovery from
-     * checkpoint.
-     */
-    protected final HashSet<Path> pathsAlreadyProcessed;
-
-    /**
-     * A {@link DeltaLog} instance to read snapshot data and get table changes from.
-     */
-    protected final DeltaLog deltaLog;
-
-    /**
-     * An initial {@link Snapshot} version that we start reading Delta Table from.
-     */
-    protected final long initialSnapshotVersion;
-
-    /**
-     * A {@link DeltaSourceConfiguration} used while creating
-     * {@link io.delta.flink.source.DeltaSource}
-     */
-    protected final DeltaSourceConfiguration sourceConfiguration;
 
     protected DeltaSourceSplitEnumerator(
-        Path deltaTablePath, FileSplitAssigner splitAssigner, Configuration configuration,
-        SplitEnumeratorContext<DeltaSourceSplit> enumContext,
-        DeltaSourceConfiguration sourceConfiguration,
-        long checkpointSnapshotVersion, Collection<Path> alreadyDiscoveredPaths) {
+        Path deltaTablePath, FileSplitAssigner splitAssigner,
+        SplitEnumeratorContext<DeltaSourceSplit> enumContext) {
 
+        this.deltaTablePath = deltaTablePath;
         this.splitAssigner = splitAssigner;
         this.enumContext = enumContext;
         this.readersAwaitingSplit = new LinkedHashMap<>();
-        this.deltaTablePath = deltaTablePath;
-        this.sourceConfiguration = sourceConfiguration;
-
-        this.deltaLog =
-            DeltaLog.forTable(configuration, SourceUtils.pathToString(deltaTablePath));
-        this.snapshot = getInitialSnapshot(checkpointSnapshotVersion);
-
-        this.initialSnapshotVersion = snapshot.getVersion();
-        this.pathsAlreadyProcessed = new HashSet<>(alreadyDiscoveredPaths);
     }
 
     @Override
@@ -164,21 +118,6 @@ public abstract class DeltaSourceSplitEnumerator implements
      */
     protected abstract void handleNoMoreSplits(int subtaskId);
 
-    /**
-     * The implementation of this method encapsulates the initial snapshot creation logic.
-     * <p>
-     * This method is called from {@code DeltaSourceSplitEnumerator} constructor during object
-     * initialization.
-     *
-     * @param checkpointSnapshotVersion - version of snapshot from checkpoint. If the value is equal
-     *                                  to {@link #NO_SNAPSHOT_VERSION} it means that this is first
-     *                                  Source initialization and not a recovery from a Flink's
-     *                                  checkpoint.
-     * @return A {@link Snapshot} that will be used as an initial Delta Table {@code Snapshot} to
-     * read data from.
-     */
-    protected abstract Snapshot getInitialSnapshot(long checkpointSnapshotVersion);
-
     @SuppressWarnings("unchecked")
     protected Collection<DeltaSourceSplit> getRemainingSplits() {
         // The Flink's SplitAssigner interface uses FileSourceSplit
@@ -197,13 +136,7 @@ public abstract class DeltaSourceSplitEnumerator implements
         splitAssigner.addSplits((Collection<FileSourceSplit>) (Collection<?>) splits);
     }
 
-    protected AddFileEnumeratorContext setUpEnumeratorContext(List<AddFile> addFiles,
-        long snapshotVersion) {
-        String pathString = SourceUtils.pathToString(deltaTablePath);
-        return new AddFileEnumeratorContext(pathString, addFiles, snapshotVersion);
-    }
-
-    private AssignSplitStatus assignSplits() {
+    protected AssignSplitStatus assignSplits() {
         final Iterator<Entry<Integer, String>> awaitingReader =
             readersAwaitingSplit.entrySet().iterator();
 
@@ -234,30 +167,12 @@ public abstract class DeltaSourceSplitEnumerator implements
         return NO_MORE_READERS;
     }
 
-    protected TransitiveOptional<Snapshot> getSnapshotFromCheckpoint(
-        long checkpointSnapshotVersion) {
-        if (checkpointSnapshotVersion != NO_SNAPSHOT_VERSION) {
-            return TransitiveOptional.ofNullable(
-                deltaLog.getSnapshotForVersionAsOf(checkpointSnapshotVersion));
-        }
-        return TransitiveOptional.empty();
-    }
-
-    protected TransitiveOptional<Snapshot> getHeadSnapshot() {
-        return TransitiveOptional.ofNullable(deltaLog.snapshot());
-    }
-
     private void assignSplits(int subtaskId) {
         AssignSplitStatus assignSplitStatus = assignSplits();
         if (NO_MORE_SPLITS.equals(assignSplitStatus)) {
             LOG.info("No more splits available for subtasks");
             handleNoMoreSplits(subtaskId);
         }
-    }
-
-    @VisibleForTesting
-    Snapshot getSnapshot() {
-        return this.snapshot;
     }
 
     public enum AssignSplitStatus {

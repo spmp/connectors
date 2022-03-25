@@ -10,6 +10,8 @@ import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 import org.apache.flink.connector.file.src.assigners.FileSplitAssigner;
 import org.apache.flink.core.fs.Path;
 import org.apache.hadoop.conf.Configuration;
+import static io.delta.flink.source.internal.DeltaSourceOptions.STARTING_TIMESTAMP;
+import static io.delta.flink.source.internal.DeltaSourceOptions.STARTING_VERSION;
 
 /**
  * An implementation of {@link SplitEnumeratorProvider} that creates a {@code
@@ -38,27 +40,34 @@ public class ContinuousSplitEnumeratorProvider implements SplitEnumeratorProvide
 
     @Override
     public SplitEnumerator<DeltaSourceSplit, DeltaEnumeratorStateCheckpoint<DeltaSourceSplit>>
-        createEnumerator(Path deltaTablePath, Configuration configuration,
+        createInitialStateEnumerator(Path deltaTablePath, Configuration configuration,
         SplitEnumeratorContext<DeltaSourceSplit> enumContext,
         DeltaSourceConfiguration sourceConfiguration) {
 
-        // TODO add in PR 6
+        // TODO PR_6_refactoring_Continuous
         return null;
     }
 
+    @SuppressWarnings("unchecked")
     @Override
     public SplitEnumerator<DeltaSourceSplit, DeltaEnumeratorStateCheckpoint<DeltaSourceSplit>>
-        createEnumerator(
+        createEnumeratorForCheckpoint(
         DeltaEnumeratorStateCheckpoint<DeltaSourceSplit> checkpoint, Configuration configuration,
         SplitEnumeratorContext<DeltaSourceSplit> enumContext,
         DeltaSourceConfiguration sourceConfiguration) {
 
-        // TODO add in PR 6
+        // TODO PR_6_refactoring_Continuous
         return null;
     }
 
     @Override
     public Boundedness getBoundedness() {
         return Boundedness.CONTINUOUS_UNBOUNDED;
+    }
+
+    private boolean isChangeStreamOnly(DeltaSourceConfiguration sourceConfiguration) {
+        return
+            sourceConfiguration.hasOption(STARTING_VERSION) ||
+                sourceConfiguration.hasOption(STARTING_TIMESTAMP);
     }
 }
