@@ -85,10 +85,57 @@ public class DeltaSourceOptions {
      * mode only.
      * <p>
      * <p>
-     * The String representation for this option is <b>updateCheckIntervalMillis</b>.
+     * The String representation for this option is <b>updateCheckIntervalMillis</b> and its default
+     * value is 5000.
      */
     public static final ConfigOption<Integer> UPDATE_CHECK_INTERVAL =
         ConfigOptions.key("updateCheckIntervalMillis").intType().defaultValue(5000);
+
+    /**
+     * An option to specify initial delay (in milliseconds) for starting periodical Delta table
+     * checks for updates. Applicable for
+     * {@link org.apache.flink.api.connector.source.Boundedness#CONTINUOUS_UNBOUNDED}
+     * mode only.
+     * <p>
+     * <p>
+     * The String representation for this option is <b>updateCheckDelayMillis</b> and its default
+     * value is 1000.
+     */
+    public static final ConfigOption<Integer> UPDATE_CHECK_INITIAL_DELAY =
+        ConfigOptions.key("updateCheckDelayMillis").intType().defaultValue(1000);
+
+    /**
+     * An option used to allow processing Delta table versions containing only {@link
+     * io.delta.standalone.actions.RemoveFile} actions.
+     * <p>
+     * If this option is set to true, Source connector will not throw an exception when processing
+     * version containing only {@link io.delta.standalone.actions.RemoveFile} actions regardless of
+     * {@link io.delta.standalone.actions.RemoveFile#isDataChange()} flag.
+     * <p>
+     * <p>
+     * The String representation for this option is <b>ignoreDeletes</b> and its default value is
+     * false.
+     */
+    public static final ConfigOption<Boolean> IGNORE_DELETES =
+        ConfigOptions.key("ignoreDeletes").booleanType().defaultValue(false);
+
+    /**
+     * An option used to allow processing Delta table versions containing both {@link
+     * io.delta.standalone.actions.RemoveFile} {@link io.delta.standalone.actions.AddFile} actions.
+     * <p>
+     * This option subsumes {@link #IGNORE_DELETES} option.
+     * <p>
+     * If this option is set to true, Source connector will not throw an exception when processing
+     * version containing combination of {@link io.delta.standalone.actions.RemoveFile} and {@link
+     * io.delta.standalone.actions.AddFile} actions regardless of {@link
+     * io.delta.standalone.actions.RemoveFile#isDataChange()} flag.
+     * <p>
+     * <p>
+     * The String representation for this option is <b>ignoreChanges</b> and its default value is
+     * false.
+     */
+    public static final ConfigOption<Boolean> IGNORE_CHANGES =
+        ConfigOptions.key("ignoreChanges").booleanType().defaultValue(false);
 
     // TODO test all allowed options
     static {
@@ -97,7 +144,8 @@ public class DeltaSourceOptions {
         VALID_SOURCE_OPTIONS.put(STARTING_VERSION.key(), STARTING_VERSION);
         VALID_SOURCE_OPTIONS.put(STARTING_TIMESTAMP.key(), STARTING_TIMESTAMP);
         VALID_SOURCE_OPTIONS.put(UPDATE_CHECK_INTERVAL.key(), UPDATE_CHECK_INTERVAL);
+        VALID_SOURCE_OPTIONS.put(UPDATE_CHECK_INITIAL_DELAY.key(), UPDATE_CHECK_INITIAL_DELAY);
+        VALID_SOURCE_OPTIONS.put(IGNORE_DELETES.key(), IGNORE_DELETES);
+        VALID_SOURCE_OPTIONS.put(IGNORE_CHANGES.key(), IGNORE_CHANGES);
     }
-
-    // TODO Add other options in future PRs
 }

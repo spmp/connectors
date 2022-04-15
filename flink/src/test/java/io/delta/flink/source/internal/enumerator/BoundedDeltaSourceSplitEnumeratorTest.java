@@ -1,5 +1,6 @@
 package io.delta.flink.source.internal.enumerator;
 
+import java.net.URISyntaxException;
 import java.util.Collection;
 import java.util.Collections;
 
@@ -7,6 +8,7 @@ import io.delta.flink.source.internal.DeltaSourceOptions;
 import io.delta.flink.source.internal.file.AddFileEnumerator.SplitFilter;
 import io.delta.flink.source.internal.file.AddFileEnumeratorContext;
 import io.delta.flink.source.internal.state.DeltaEnumeratorStateCheckpoint;
+import io.delta.flink.source.internal.state.DeltaEnumeratorStateCheckpointBuilder;
 import io.delta.flink.source.internal.state.DeltaSourceSplit;
 import org.junit.After;
 import org.junit.Before;
@@ -36,7 +38,7 @@ public class BoundedDeltaSourceSplitEnumeratorTest extends DeltaSourceSplitEnume
     private BoundedSplitEnumeratorProvider provider;
 
     @Before
-    public void setUp() {
+    public void setUp() throws URISyntaxException {
         super.setUp();
 
         when(splitAssignerProvider.create(any())).thenReturn(splitAssigner);
@@ -110,8 +112,9 @@ public class BoundedDeltaSourceSplitEnumeratorTest extends DeltaSourceSplitEnume
         when(checkpointedSnapshot.getVersion()).thenReturn(snapshotVersion);
 
         DeltaEnumeratorStateCheckpoint<DeltaSourceSplit> checkpoint =
-            DeltaEnumeratorStateCheckpoint.fromCollectionSnapshot(deltaTablePath, snapshotVersion,
-                false, Collections.emptyList(), Collections.emptyList());
+            DeltaEnumeratorStateCheckpointBuilder
+                .builder(deltaTablePath, snapshotVersion, Collections.emptyList())
+                .build();
 
         enumerator = setUpEnumeratorFromCheckpoint(checkpoint);
         enumerator.start();

@@ -1,11 +1,10 @@
 package io.delta.flink.source.internal.enumerator.processor;
 
-import java.util.Collection;
 import java.util.List;
 import java.util.function.Consumer;
 
+import io.delta.flink.source.internal.state.DeltaEnumeratorStateCheckpointBuilder;
 import io.delta.flink.source.internal.state.DeltaSourceSplit;
-import org.apache.flink.core.fs.Path;
 
 /**
  * A processor for Delta table data.
@@ -30,13 +29,18 @@ public interface TableProcessor {
     long getSnapshotVersion();
 
     /**
-     * @return A {@link Collection} of already processed Parquet file path that this processor
-     * processed.
+     * Add {@link TableProcessor} state information to {@link DeltaEnumeratorStateCheckpointBuilder}
+     * to be stored in Flink's checkpoint.
      * <p>
-     * The exact scope of this collection depends on the implementation. Some may return every path
-     * that was processed (for example {@link SnapshotProcessor}) and others can return only those
-     * that were processed in scope of given snapshot version (for example {@link
-     * SnapshotAndChangesTableProcessor});
+     * The implementation of this method should add the latest state information to {@link
+     * DeltaEnumeratorStateCheckpointBuilder} needed to recreate {@link TableProcessor} instance
+     * during Flink recovery.
+     *
+     * @param checkpointBuilder the {@link DeltaEnumeratorStateCheckpointBuilder} instance that
+     *                          should be updated with {@link TableProcessor} state information.
+     * @return the {@link DeltaEnumeratorStateCheckpointBuilder} instance with {@link
+     * TableProcessor} state information.
      */
-    Collection<Path> getAlreadyProcessedPaths();
+    DeltaEnumeratorStateCheckpointBuilder<DeltaSourceSplit> snapshotState(
+        DeltaEnumeratorStateCheckpointBuilder<DeltaSourceSplit> checkpointBuilder);
 }

@@ -1,21 +1,26 @@
 package io.delta.flink.source.internal.enumerator.processor;
 
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.function.Consumer;
 
+import io.delta.flink.source.internal.DeltaSourceConfiguration;
+import io.delta.flink.source.internal.DeltaSourceOptions;
+import io.delta.flink.source.internal.enumerator.monitor.ChangesPerVersion;
 import io.delta.flink.source.internal.enumerator.monitor.TableMonitor;
 import io.delta.flink.source.internal.enumerator.monitor.TableMonitorResult;
-import io.delta.flink.source.internal.enumerator.monitor.TableMonitorResult.ChangesPerVersion;
+import io.delta.flink.source.internal.exceptions.DeltaSourceException;
+import io.delta.flink.source.internal.exceptions.DeltaSourceExceptions;
+import io.delta.flink.source.internal.file.AddFileEnumerator;
+import io.delta.flink.source.internal.state.DeltaEnumeratorStateCheckpointBuilder;
 import io.delta.flink.source.internal.state.DeltaSourceSplit;
+import io.delta.flink.source.internal.utils.SourceUtils;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 import org.apache.flink.core.fs.Path;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.delta.standalone.Snapshot;
+import io.delta.standalone.actions.Action;
 import io.delta.standalone.actions.AddFile;
 
 /**
@@ -24,17 +29,16 @@ import io.delta.standalone.actions.AddFile;
  * Snapshot} content.
  *
  * <p>
- * The {@code Snapshot} version is specified by {@link TableMonitor} used when creating an
- * instance of {@code ChangesProcessor}.
+ * The {@code Snapshot} version is specified by {@link TableMonitor} used when creating an instance
+ * of {@code ChangesProcessor}.
  */
-public class ChangesProcessor implements ContinuousTableProcessor {
+public class ChangesProcessor extends BaseTableProcessor implements ContinuousTableProcessor {
 
     private static final Logger LOG = LoggerFactory.getLogger(ChangesProcessor.class);
 
     /**
      * The {@link TableMonitor} instance used to monitor Delta table for changes.
      */
-    // TODO PR 7 Will be used for monitoring for changes.
     private final TableMonitor tableMonitor;
 
     /**
@@ -43,42 +47,42 @@ public class ChangesProcessor implements ContinuousTableProcessor {
     private final SplitEnumeratorContext<DeltaSourceSplit> enumContext;
 
     /**
-     * Set with already processed paths for Parquet Files. Processor will skip not process parquet
-     * files from this set.
-     * <p>
-     * The use case for this set is a recovery from checkpoint scenario, where we don't want to
-     * reprocess already processed Parquet files.
+     * An interval value in milliseconds to periodically check the Delta table for new changes.
      */
-    // TODO PR 7 - update this set in prepareSplits method.
-    private final HashSet<Path> alreadyProcessedPaths;
-
-    // TODO PR 7 Will be used for monitoring for changes.
-    // private final boolean ignoreChanges;
-
-    // TODO PR 7 Will be used for monitoring for changes.
-    // private final boolean ignoreDeletes;
+    private final long checkInterval;
 
     /**
-     * A Delta table {@link io.delta.standalone.Snapshot} version currently used by this {@link
-     * ChangesProcessor} to read changes from. This value will be updated after discovering new
-     * versions on Delta table.
+     * A delay value in milliseconds for first check of Delta table for new changes.
      */
-    // TODO PR 7 version will be updated by processDiscoveredVersions method after discovering new
-    //  changes.
+    private final long initialDelay;
+
+    /**
+     * A {@link Snapshot} version that this processor used as a starting version to get changes from
+     * Delta table.
+     * <p>
+     * This value will be updated while processing every version from {@link TableMonitorResult}.
+     */
     private long currentSnapshotVersion;
 
-    public ChangesProcessor(TableMonitor tableMonitor,
+    public ChangesProcessor(
+        Path deltaTablePath, TableMonitor tableMonitor,
         SplitEnumeratorContext<DeltaSourceSplit> enumContext,
-        Collection<Path> alreadyProcessedPaths) {
+        AddFileEnumerator<DeltaSourceSplit> fileEnumerator,
+        DeltaSourceConfiguration sourceConfiguration) {
+        super(deltaTablePath, fileEnumerator);
         this.tableMonitor = tableMonitor;
         this.enumContext = enumContext;
-        this.alreadyProcessedPaths = new HashSet<>(alreadyProcessedPaths);
         this.currentSnapshotVersion = this.tableMonitor.getMonitorVersion();
+
+        this.checkInterval = sourceConfiguration.getValue(DeltaSourceOptions.UPDATE_CHECK_INTERVAL);
+        this.initialDelay =
+            sourceConfiguration.getValue(DeltaSourceOptions.UPDATE_CHECK_INITIAL_DELAY);
     }
 
     /**
      * Starts processing changes that were added to Delta table starting from version specified by
-     * {@link #currentSnapshotVersion} field by converting them to {@link DeltaSourceSplit} objects.
+     * {@link #currentSnapshotVersion} field by converting them to {@link DeltaSourceSplit}
+     * objects.
      *
      * @param processCallback A {@link Consumer} callback that will be called after processing all
      *                        {@link io.delta.standalone.actions.Action} and converting them to
@@ -87,34 +91,29 @@ public class ChangesProcessor implements ContinuousTableProcessor {
      */
     @Override
     public void process(Consumer<List<DeltaSourceSplit>> processCallback) {
-        // TODO PR 7 add tests to check split creation//assignment granularity is in scope of
+        // TODO PR 7.1 add tests to check split creation//assignment granularity is in scope of
         //  VersionLog.
         //monitor for changes
         enumContext.callAsync(
             tableMonitor, // executed sequentially by ScheduledPool Thread.
             (tableMonitorResult, throwable) -> processDiscoveredVersions(tableMonitorResult,
                 processCallback, throwable), // executed by Flink's Source-Coordinator Thread.
-            5000, // PR 7 Take from DeltaSourceConfiguration
-            5000); // PR 7 Take from DeltaSourceConfiguration
+            initialDelay, checkInterval);
     }
 
     /**
-     * @return A {@link Snapshot} version that this processor reads changes from. The method can
-     * return different values for every method call, depending whether there were any changes on
-     * Delta table.
+     * @return A {@link Snapshot} version that this processor used as a starting version to get
+     * changes from Delta table. The method can return different values for every method call.
      */
     @Override
     public long getSnapshotVersion() {
         return this.currentSnapshotVersion;
     }
 
-    /**
-     * @return Collection of {@link Path} objects that corresponds to Parquet files processed by
-     * this processor in scope of {@link #getSnapshotVersion()}.
-     */
     @Override
-    public Collection<Path> getAlreadyProcessedPaths() {
-        return alreadyProcessedPaths;
+    public DeltaEnumeratorStateCheckpointBuilder<DeltaSourceSplit> snapshotState(
+        DeltaEnumeratorStateCheckpointBuilder<DeltaSourceSplit> checkpointBuilder) {
+        return checkpointBuilder.withMonitoringForChanges(isMonitoringForChanges());
     }
 
     /**
@@ -125,30 +124,52 @@ public class ChangesProcessor implements ContinuousTableProcessor {
         return true;
     }
 
-    private void processDiscoveredVersions(TableMonitorResult monitorTableResult,
-        Consumer<List<DeltaSourceSplit>> processCallback, Throwable error) {
+    /**
+     * Process all versions discovered by {@link TableMonitor} in the latest Table check.
+     *
+     * @param monitorTableResult Result of {@link TableMonitor} table check.
+     * @param processCallback    A callback that should be called while processing Delta table
+     *                           changes.
+     * @param error              An error that was returned by the monitoring thread. Can be null.
+     */
+    private void processDiscoveredVersions(
+        TableMonitorResult monitorTableResult, Consumer<List<DeltaSourceSplit>> processCallback,
+        Throwable error) {
         if (error != null) {
             LOG.error("Failed to enumerate files", error);
-            // TODO Add in PR 7
-            //DeltaSourceExceptionUtils.generalSourceException(error);
+            if (error instanceof DeltaSourceException) {
+                throw (DeltaSourceException) error;
+            }
+
+            throw DeltaSourceExceptions.tableMonitorException(
+                SourceUtils.pathToString(deltaTablePath), error);
         }
 
-        this.currentSnapshotVersion = monitorTableResult.getHighestSeenVersion();
-        List<ChangesPerVersion> newActions = monitorTableResult.getChanges();
-
-        newActions.stream()
-            .map(this::processActions)
-            .map(this::prepareSplits)
-            .forEachOrdered(processCallback);
+        monitorTableResult.getChanges()
+            .forEach(changesPerVersion -> processVersion(processCallback, changesPerVersion));
     }
 
-    // TODO PR 7 Add implementation and tests
-    private List<AddFile> processActions(ChangesPerVersion changes) {
-        return Collections.emptyList();
-    }
+    /**
+     * Process changes from individual Delta table version.
+     *
+     * @param processCallback   A callback that should be called while processing Delta table
+     *                          changes.
+     * @param changesPerVersion The {@link ChangesPerVersion} object containing {@link Action}s for
+     *                          given {@link ChangesPerVersion#getSnapshotVersion()} version.
+     */
+    private void processVersion(
+        Consumer<List<DeltaSourceSplit>> processCallback,
+        ChangesPerVersion<AddFile> changesPerVersion) {
 
-    // TODO PR 7 Add implementation and tests
-    private List<DeltaSourceSplit> prepareSplits(List<AddFile> addFiles) {
-        return Collections.emptyList();
+        // This may look like TableMonitor#monitorVersion field. However, TableMonitor's field
+        // will be updated on a different thread than this method here is executed. So to avoid
+        // any race conditions and visibility issues caused by updating and reading field from two
+        // threads, we are using data from TableMonitorResult.
+        // From ChangesProcessor perspective we only need to know what is the next version that
+        // we used as deltaLog.getChanges(version, boolean) and this will be this here.
+        this.currentSnapshotVersion = changesPerVersion.getSnapshotVersion() + 1;
+
+        List<DeltaSourceSplit> splits = prepareSplits(changesPerVersion, (path) -> true);
+        processCallback.accept(splits);
     }
 }

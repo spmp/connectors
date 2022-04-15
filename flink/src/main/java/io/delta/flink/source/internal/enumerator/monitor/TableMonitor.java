@@ -1,8 +1,17 @@
 package io.delta.flink.source.internal.enumerator.monitor;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
 import java.util.concurrent.Callable;
 
+import io.delta.flink.source.internal.enumerator.processor.ActionProcessor;
+
 import io.delta.standalone.DeltaLog;
+import io.delta.standalone.VersionLog;
+import io.delta.standalone.actions.Action;
+import io.delta.standalone.actions.AddFile;
 
 /**
  * This class implements a logic for monitoring Delta table for changes. The logic is implemented in
@@ -18,6 +27,12 @@ public class TableMonitor implements Callable<TableMonitorResult> {
      * The Delta Log/Delta table that this instance monitor for changes.
      */
     private final DeltaLog deltaLog;
+
+    /**
+     * An {@link ActionProcessor} instance used to process {@link Action} object from Delta {@link
+     * io.delta.standalone.VersionLog}.
+     */
+    private final ActionProcessor actionProcessor;
 
     /**
      * The "maximal" duration that each subsequent call to {@link #call()} method should take. This
@@ -40,14 +55,20 @@ public class TableMonitor implements Callable<TableMonitorResult> {
      *                          this instance will monitor for changes.
      * @param maxDurationMillis The "maximal" duration that each subsequent call to {@link #call()}
      *                          method should take. This is a soft limit, which means that
-     *                          implementation will try to guarantee that overall call is * no
+     *                          implementation will try to guarantee that overall call is no
      *                          longer that this limit. See {@link #call()} method for details.
+     * @param actionProcessor   The {@link ActionProcessor} instance used to process {@link Action}
+     *                          discovered on Delta table.
      */
-    public TableMonitor(DeltaLog deltaLog, long monitorVersion,
-        long maxDurationMillis) {
+    public TableMonitor(
+            DeltaLog deltaLog,
+            long monitorVersion,
+            long maxDurationMillis,
+            ActionProcessor actionProcessor) {
         this.deltaLog = deltaLog;
         this.monitorVersion = monitorVersion;
         this.maxDurationMillis = maxDurationMillis;
+        this.actionProcessor = actionProcessor;
     }
 
     /**
@@ -61,11 +82,65 @@ public class TableMonitor implements Callable<TableMonitorResult> {
      */
     @Override
     public TableMonitorResult call() throws Exception {
-        // TODO PR 7 Add monitor implementation and tests, for now return null.
-        return null;
+        // TODO PR 7.1 add tests
+        TableMonitorResult monitorResult = monitorForChanges(this.monitorVersion);
+        List<ChangesPerVersion<AddFile>> discoveredChanges = monitorResult.getChanges();
+        if (!discoveredChanges.isEmpty()) {
+            this.monitorVersion =
+                // next monitor version will be the last discovered version + 1;
+                discoveredChanges.get(discoveredChanges.size() - 1).getSnapshotVersion() + 1;
+        }
+        return monitorResult;
     }
 
     public long getMonitorVersion() {
         return monitorVersion;
+    }
+
+    private TableMonitorResult monitorForChanges(long startVersion) {
+
+        // TODO PR 7.1 Add tests, especially for Action filters.
+        Iterator<VersionLog> changes =
+            deltaLog.getChanges(startVersion, true); // failOnDataLoss=true
+        if (changes.hasNext()) {
+            return processChanges(changes);
+        }
+
+        // Case if there were no changes.
+        return new TableMonitorResult(Collections.emptyList());
+    }
+
+    private TableMonitorResult processChanges(Iterator<VersionLog> changes) {
+
+        // this must be an ordered list
+        List<ChangesPerVersion<AddFile>> changesPerVersion = new ArrayList<>();
+
+        long endTime = System.currentTimeMillis() + maxDurationMillis;
+
+        String deltaTablePath = deltaLog.getPath().toUri().normalize().toString();
+
+        while (changes.hasNext()) {
+            VersionLog versionLog = changes.next();
+
+            // We must assign splits at VersionLog element granularity, meaning that we cannot
+            // assign splits while integrating through VersionLog changes. We must do it only
+            // when we are sure that there were no breaking changes in this version. In other
+            // case we could emit downstream a corrupted data or unsupported data change.
+            ChangesPerVersion<Action> version =
+                new ChangesPerVersion<>(
+                    deltaTablePath, versionLog.getVersion(), versionLog.getActions());
+
+            ChangesPerVersion<AddFile> addFilesPerVersion = actionProcessor.processActions(version);
+
+            changesPerVersion.add(addFilesPerVersion);
+
+            // TODO PR 7.1 write unit test for this
+            // Check if we still under task interval limit.
+            if (System.currentTimeMillis() >= endTime) {
+                break;
+            }
+        }
+
+        return new TableMonitorResult(changesPerVersion);
     }
 }
