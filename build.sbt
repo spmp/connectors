@@ -47,7 +47,7 @@ val parquetHadoopVersion = "1.10.1"
 val scalaTestVersion = "3.0.8"
 // Versions for Hive 3
 val hadoopVersion = "3.1.0"
-val hiveVersion = "3.1.2"
+val hiveVersion = "4.0.0-alpha-1"
 val tezVersion = "0.9.2"
 // Versions for Hive 2
 val hadoopVersionForHive2 = "2.7.2"
